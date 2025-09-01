@@ -101,9 +101,9 @@ jobs:
                   }
                 },
                 "healthCheck": {
-                  "command": ["CMD-SHELL", "zabbix_server -V >/dev/null 2>&1 || exit 1"],
+                  "command": ["CMD-SHELL", "nc -z localhost 10051 || exit 1"],
                   "interval": 30,
-                  "timeout": 10,
+                  "timeout": 5,
                   "retries": 3,
                   "startPeriod": 30
                 }
@@ -155,6 +155,9 @@ jobs:
           # Substitute environment variables
           envsubst < task-definition.json > final-task-definition.json
           
+          # Validate JSON
+          cat final-task-definition.json | jq .
+
           # Register the task definition
           aws ecs register-task-definition --cli-input-json file://final-task-definition.json
 
