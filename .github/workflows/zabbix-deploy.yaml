@@ -38,7 +38,7 @@ jobs:
         run: |
           cat > task-definition.json << 'EOF'
           {
-            "family": "$TASK_DEF_NAME",
+            "family": "zabbix-task",
             "networkMode": "awsvpc",
             "requiresCompatibilities": ["FARGATE"],
             "cpu": "1024",
@@ -58,16 +58,16 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/zabbix",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-region": "ap-south-1",
                     "awslogs-stream-prefix": "postgres"
                   }
                 },
                 "healthCheck": {
-                  "command": ["CMD-SHELL", "pg_isready -U zabbix -d zabbix || exit 1"],
+                  "command": ["CMD-SHELL", "pg_isready -U zabbix -d zabbix"],
                   "interval": 30,
                   "timeout": 5,
                   "retries": 3,
-                  "startPeriod": 30
+                  "startPeriod": 60
                 }
               },
               {
@@ -81,7 +81,7 @@ jobs:
                   }
                 ],
                 "environment": [
-                  {"name": "DB_SERVER_HOST", "value": "postgres"},
+                  {"name": "DB_SERVER_HOST", "value": "localhost"},
                   {"name": "POSTGRES_DB", "value": "zabbix"},
                   {"name": "POSTGRES_USER", "value": "zabbix"},
                   {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"}
@@ -96,16 +96,16 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/zabbix",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-region": "ap-south-1",
                     "awslogs-stream-prefix": "server"
                   }
                 },
                 "healthCheck": {
-                  "command": ["CMD-SHELL", "nc -z localhost 10051 || exit 1"],
+                  "command": ["CMD-SHELL", "zabbix_server -R config_cache_reload -c /etc/zabbix/zabbix_server.conf 2>/dev/null || exit 1"],
                   "interval": 30,
-                  "timeout": 5,
+                  "timeout": 10,
                   "retries": 3,
-                  "startPeriod": 30
+                  "startPeriod": 120
                 }
               },
               {
@@ -119,8 +119,8 @@ jobs:
                   }
                 ],
                 "environment": [
-                  {"name": "ZBX_SERVER_HOST", "value": "zabbix-server"},
-                  {"name": "DB_SERVER_HOST", "value": "postgres"},
+                  {"name": "ZBX_SERVER_HOST", "value": "localhost"},
+                  {"name": "DB_SERVER_HOST", "value": "localhost"},
                   {"name": "POSTGRES_DB", "value": "zabbix"},
                   {"name": "POSTGRES_USER", "value": "zabbix"},
                   {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"},
@@ -136,30 +136,24 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/zabbix",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-region": "ap-south-1",
                     "awslogs-stream-prefix": "web"
                   }
                 },
                 "healthCheck": {
-                  "command": ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"],
+                  "command": ["CMD-SHELL", "curl -f http://localhost:8080/ping.php || exit 1"],
                   "interval": 30,
                   "timeout": 10,
                   "retries": 3,
-                  "startPeriod": 60
+                  "startPeriod": 90
                 }
               }
             ]
           }
           EOF
 
-          # Substitute environment variables
-          envsubst < task-definition.json > final-task-definition.json
-          
-          # Validate JSON
-          cat final-task-definition.json | jq .
-
           # Register the task definition
-          aws ecs register-task-definition --cli-input-json file://final-task-definition.json
+          aws ecs register-task-definition --cli-input-json file://task-definition.json
 
       - name: Create CloudWatch log group
         run: |
