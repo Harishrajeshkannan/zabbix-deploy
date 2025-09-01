@@ -38,7 +38,7 @@ jobs:
         run: |
           cat > task-definition.json << 'EOF'
           {
-            "family": "zabbix-task",
+            "family": "$TASK_DEF_NAME",
             "networkMode": "awsvpc",
             "requiresCompatibilities": ["FARGATE"],
             "cpu": "1024",
@@ -58,7 +58,7 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/zabbix",
-                    "awslogs-region": "ap-south-1",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
                     "awslogs-stream-prefix": "postgres"
                   }
                 },
@@ -96,7 +96,7 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/zabbix",
-                    "awslogs-region": "ap-south-1",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
                     "awslogs-stream-prefix": "server"
                   }
                 },
@@ -136,7 +136,7 @@ jobs:
                   "logDriver": "awslogs",
                   "options": {
                     "awslogs-group": "/ecs/zabbix",
-                    "awslogs-region": "ap-south-1",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
                     "awslogs-stream-prefix": "web"
                   }
                 },
@@ -152,8 +152,14 @@ jobs:
           }
           EOF
 
+          # Substitute environment variables
+          envsubst < task-definition.json > final-task-definition.json
+          
+          # Validate JSON
+          cat final-task-definition.json | jq .
+
           # Register the task definition
-          aws ecs register-task-definition --cli-input-json file://task-definition.json
+          aws ecs register-task-definition --cli-input-json file://final-task-definition.json
 
       - name: Create CloudWatch log group
         run: |
