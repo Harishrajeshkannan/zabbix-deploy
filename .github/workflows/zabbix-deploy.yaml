@@ -61,6 +61,13 @@ jobs:
                     "awslogs-region": "${{ env.AWS_REGION }}",
                     "awslogs-stream-prefix": "postgres"
                   }
+                },
+                "healthCheck": {
+                  "command": ["CMD-SHELL", "pg_isready -U zabbix -d zabbix || exit 1"],
+                  "interval": 30,
+                  "timeout": 5,
+                  "retries": 3,
+                  "startPeriod": 30
                 }
               },
               {
@@ -74,7 +81,7 @@ jobs:
                   }
                 ],
                 "environment": [
-                  {"name": "DB_SERVER_HOST", "value": "localhost"},
+                  {"name": "DB_SERVER_HOST", "value": "postgres"},
                   {"name": "POSTGRES_DB", "value": "zabbix"},
                   {"name": "POSTGRES_USER", "value": "zabbix"},
                   {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"}
@@ -92,6 +99,13 @@ jobs:
                     "awslogs-region": "${{ env.AWS_REGION }}",
                     "awslogs-stream-prefix": "server"
                   }
+                },
+                "healthCheck": {
+                  "command": ["CMD-SHELL", "zabbix_server -V >/dev/null 2>&1 || exit 1"],
+                  "interval": 30,
+                  "timeout": 10,
+                  "retries": 3,
+                  "startPeriod": 30
                 }
               },
               {
@@ -105,8 +119,8 @@ jobs:
                   }
                 ],
                 "environment": [
-                  {"name": "ZBX_SERVER_HOST", "value": "localhost"},
-                  {"name": "DB_SERVER_HOST", "value": "localhost"},
+                  {"name": "ZBX_SERVER_HOST", "value": "zabbix-server"},
+                  {"name": "DB_SERVER_HOST", "value": "postgres"},
                   {"name": "POSTGRES_DB", "value": "zabbix"},
                   {"name": "POSTGRES_USER", "value": "zabbix"},
                   {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"},
@@ -125,6 +139,13 @@ jobs:
                     "awslogs-region": "${{ env.AWS_REGION }}",
                     "awslogs-stream-prefix": "web"
                   }
+                },
+                "healthCheck": {
+                  "command": ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"],
+                  "interval": 30,
+                  "timeout": 10,
+                  "retries": 3,
+                  "startPeriod": 60
                 }
               }
             ]
@@ -143,7 +164,6 @@ jobs:
 
       - name: Deploy or update ECS service
         run: |
-          # Check if service exists
           if aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].serviceName' --output text 2>/dev/null | grep -q $SERVICE_NAME; then
             echo "Updating existing service..."
             aws ecs update-service \
