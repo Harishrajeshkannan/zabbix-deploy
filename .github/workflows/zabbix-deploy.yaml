@@ -1,0 +1,169 @@
+name: Deploy Zabbix to ECS
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: ap-south-1
+  CLUSTER_NAME: zabbix-cluster
+  SERVICE_NAME: zabbix-service
+  TASK_DEF_NAME: zabbix-task
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create ECS cluster if not exists
+        run: |
+          if ! aws ecs describe-clusters --clusters $CLUSTER_NAME --query 'clusters[0].clusterName' --output text 2>/dev/null | grep -q $CLUSTER_NAME; then
+            echo "Creating ECS cluster: $CLUSTER_NAME"
+            aws ecs create-cluster --cluster-name $CLUSTER_NAME
+          else
+            echo "ECS cluster $CLUSTER_NAME already exists"
+          fi
+
+      - name: Register task definition
+        run: |
+          cat > task-definition.json << 'EOF'
+          {
+            "family": "$TASK_DEF_NAME",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "1024",
+            "memory": "2048",
+            "executionRoleArn": "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/ecsTaskExecutionRole",
+            "containerDefinitions": [
+              {
+                "name": "postgres",
+                "image": "postgres:15-alpine",
+                "essential": true,
+                "environment": [
+                  {"name": "POSTGRES_DB", "value": "zabbix"},
+                  {"name": "POSTGRES_USER", "value": "zabbix"},
+                  {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"}
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/zabbix",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-stream-prefix": "postgres"
+                  }
+                }
+              },
+              {
+                "name": "zabbix-server",
+                "image": "zabbix/zabbix-server-pgsql:latest",
+                "essential": true,
+                "dependsOn": [
+                  {
+                    "containerName": "postgres",
+                    "condition": "HEALTHY"
+                  }
+                ],
+                "environment": [
+                  {"name": "DB_SERVER_HOST", "value": "localhost"},
+                  {"name": "POSTGRES_DB", "value": "zabbix"},
+                  {"name": "POSTGRES_USER", "value": "zabbix"},
+                  {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"}
+                ],
+                "portMappings": [
+                  {
+                    "containerPort": 10051,
+                    "protocol": "tcp"
+                  }
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/zabbix",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-stream-prefix": "server"
+                  }
+                }
+              },
+              {
+                "name": "zabbix-web",
+                "image": "zabbix/zabbix-web-apache-pgsql:latest",
+                "essential": true,
+                "dependsOn": [
+                  {
+                    "containerName": "zabbix-server",
+                    "condition": "HEALTHY"
+                  }
+                ],
+                "environment": [
+                  {"name": "ZBX_SERVER_HOST", "value": "localhost"},
+                  {"name": "DB_SERVER_HOST", "value": "localhost"},
+                  {"name": "POSTGRES_DB", "value": "zabbix"},
+                  {"name": "POSTGRES_USER", "value": "zabbix"},
+                  {"name": "POSTGRES_PASSWORD", "value": "${{ secrets.DB_PASSWORD }}"},
+                  {"name": "PHP_TZ", "value": "Asia/Kolkata"}
+                ],
+                "portMappings": [
+                  {
+                    "containerPort": 8080,
+                    "protocol": "tcp"
+                  }
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/zabbix",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-stream-prefix": "web"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+
+          # Substitute environment variables
+          envsubst < task-definition.json > final-task-definition.json
+          
+          # Register the task definition
+          aws ecs register-task-definition --cli-input-json file://final-task-definition.json
+
+      - name: Create CloudWatch log group
+        run: |
+          aws logs create-log-group --log-group-name /ecs/zabbix --region ${{ env.AWS_REGION }} || true
+
+      - name: Deploy or update ECS service
+        run: |
+          # Check if service exists
+          if aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0].serviceName' --output text 2>/dev/null | grep -q $SERVICE_NAME; then
+            echo "Updating existing service..."
+            aws ecs update-service \
+              --cluster $CLUSTER_NAME \
+              --service $SERVICE_NAME \
+              --task-definition $TASK_DEF_NAME \
+              --force-new-deployment
+          else
+            echo "Creating new service..."
+            aws ecs create-service \
+              --cluster $CLUSTER_NAME \
+              --service-name $SERVICE_NAME \
+              --task-definition $TASK_DEF_NAME \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_ID }}],securityGroups=[${{ secrets.SECURITY_GROUP_ID }}],assignPublicIp=ENABLED}"
+          fi
+
+      - name: Wait for deployment to complete
+        run: |
+          echo "Waiting for service to stabilize..."
+          aws ecs wait services-stable --cluster $CLUSTER_NAME --services $SERVICE_NAME
+          echo "Deployment completed successfully!"
